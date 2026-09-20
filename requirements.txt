@@ -1,6 +1,7 @@
 streamlit
 pandas
 python-docx
+pypdf
 gspread
 oauth2client
 openpyxl

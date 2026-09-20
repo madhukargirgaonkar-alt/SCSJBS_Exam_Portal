@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import docx
+import pypdf
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import random
@@ -146,7 +147,6 @@ def get_db():
         ws_res = ss.add_worksheet(title="Results", rows="3000", cols="15")
         ws_res.append_row(["Class", "Division", "Roll_No", "Student_Name", "Exam_Type", "Subject", "Score", "Total", "Date_Time"])
 
-    # Teachers शीटमध्ये Session_Token साठी अतिरिक्त कॉलम सांभाळणे
     ws_teach = get_or_create("Teachers", ["Teacher_Name", "Mobile", "Assigned_Class", "Assigned_Division", "Username", "Password", "Date_Created", "Session_Token"])
     ws_stud = get_or_create("Students_Credentials", ["Class", "Division", "Roll_No", "Student_Name", "Mobile", "Username", "Password"])
     ws_q = get_or_create("Questions_Bank", ["Class", "Division", "Exam_Type", "Subject", "Marks", "Duration_Minutes", "Question", "Option_A", "Option_B", "Option_C", "Option_D", "Correct_Option", "Added_By"])
@@ -190,7 +190,7 @@ def safe_get_dataframe(worksheet):
         return pd.DataFrame()
 
 # ==============================================================================
-# २. स्मार्ट वर्ग व प्रश्ननिहाय गुण तपासणारा Word पार्सर
+# २. स्मार्ट वर्ग व प्रश्ननिहाय गुण तपासणारा Word व PDF पार्सर
 # ==============================================================================
 def clean_marathi(txt):
     if not txt: 
@@ -219,6 +219,19 @@ def get_clean_div(div_str):
 def parse_questions_docx(doc_file, assigned_class, assigned_div, exam_type, final_subject, duration_min, teacher_name):
     doc = docx.Document(doc_file)
     lines = [clean_marathi(p.text) for p in doc.paragraphs if clean_marathi(p.text)]
+    return process_extracted_lines(lines, assigned_class, assigned_div, exam_type, final_subject, duration_min, teacher_name)
+
+def parse_questions_pdf(pdf_file, assigned_class, assigned_div, exam_type, final_subject, duration_min, teacher_name):
+    reader = pypdf.PdfReader(pdf_file)
+    text = ""
+    for page in reader.pages:
+        extracted = page.extract_text()
+        if extracted:
+            text += extracted + "\n"
+    lines = [clean_marathi(line) for line in text.split('\n') if clean_marathi(line)]
+    return process_extracted_lines(lines, assigned_class, assigned_div, exam_type, final_subject, duration_min, teacher_name)
+
+def process_extracted_lines(lines, assigned_class, assigned_div, exam_type, final_subject, duration_min, teacher_name):
     q_list, cur_q = [], {}
     cur_sub = final_subject
 
@@ -298,26 +311,6 @@ def gen_student_creds_custom(name, cls_name, div_name, roll):
     username = f"{clean_n}_{c_code}{div_l}_{r_int:02d}"
     password = f"{clean_n[:2]}{r_int:02d}"
     return username, password
-
-def make_teacher_wa_url(mobile, name, cls, div, username, password):
-    m = str(mobile).strip().replace("+", "").replace(".0", "")
-    if len(m) == 10:
-        m = f"91{m}"
-    
-    msg = (
-        f"*श्री छत्रपती शिवाजी ज्युनिअर बेसिक स्कूल सगरोळी ऑनलाईन परीक्षा महाप्रणाली — शिक्षक प्रवेश*\n"
-        f"--------------------------------\n"
-        f"नमस्कार *{name}* सर/मॅडम,\n"
-        f"आपले शिक्षक खाते तयार झाले आहे.\n\n"
-        f"नियुक्त वर्ग: {cls} ({div})\n"
-        f"युझरनेम: {username}\n"
-        f"पासवर्ड: {password}\n\n"
-        f"पोर्टल लिंक: http://localhost:8501\n"
-        f"--------------------------------\n"
-        f"— मुख्याध्यापक / ॲडमिन"
-    )
-    encoded_msg = urllib.parse.quote(msg.encode('utf-8'))
-    return f"https://web.whatsapp.com/send?phone={m}&text={encoded_msg}"
 
 def make_student_wa_url(mob, name, cls, div, roll, exam_type, subject, score, tot):
     m = str(mob).strip().replace("+", "").replace(".0", "")
@@ -581,10 +574,9 @@ if mode == "विद्यार्थी परीक्षा प्रणा
                         save_silent(ans_dict)
 
 # ==============================================================================
-# 2. वर्गशिक्षक लॉगिन पोर्टल (सिंगल ॲक्टिव्ह सेशन व ऑटो लॉगआऊट वैशिष्ट्यासह)
+# 2. वर्गशिक्षक लॉगिन पोर्टल (Single Active Session + PDF/Word Support)
 # ==============================================================================
 elif mode == "वर्गशिक्षक लॉगिन पोर्टल":
-    # सुरुवातीला पार्श्वभूमीवर सत्र (Session Token) तपासा
     if st.session_state.get('t_auth', False):
         try:
             _, ws_teach, _, _, _ = get_db()
@@ -596,7 +588,6 @@ elif mode == "वर्गशिक्षक लॉगिन पोर्टल"
                 match_row = df_t[df_t['Username'].astype(str).str.strip() == str(current_user).strip()]
                 if not match_row.empty:
                     db_token = str(match_row.iloc[0].get('Session_Token', '')).strip()
-                    # जर डेटाबेसवरील टोकन आपल्या सत्राच्या टोकनपेक्षा वेगळे असेल, तर याचा अर्थ दुसऱ्या ठिकाणाहून लॉगिन झाले आहे!
                     if db_token and db_token != current_token:
                         st.warning("⚠️ तुमचे खाते अन्य ठिकाणाहून (Other Device/Tab) लॉगिन केले गेले आहे. त्यामुळे हे सत्र बंद (Auto Logged Out) होत आहे.")
                         st.session_state['t_auth'] = False
@@ -620,23 +611,17 @@ elif mode == "वर्गशिक्षक लॉगिन पोर्टल"
                         _, ws_teach, _, _, _ = get_db()
                         df_t = safe_get_dataframe(ws_teach)
                         matched = None
-                        matched_row_idx = None
-                        if not df_t.empty and "Username" in df_t.columns and "Password" in df_t.columns:
-                            for idx, row in df_t.iterrows():
-                                if str(row.get('Username', '')).strip() == u.strip() and str(row.get('Password', '')).strip() == p.strip():
-                                    matched = row.to_dict()
-                                    matched_row_idx = idx + 2 # Google Sheets 1-indexed plus header
-                                    break
+                        for idx, row in df_t.iterrows():
+                            if str(row.get('Username', '')).strip() == u.strip() and str(row.get('Password', '')).strip() == p.strip():
+                                matched = row.to_dict()
+                                break
                         
                         if matched:
-                            # नवीन युनिक सेशन टोकन तयार करणे
                             new_token = str(uuid.uuid4())
                             matched['Session_Token'] = new_token
                             
-                            # जर शीट्समध्ये Session_Token कॉलम नसेल किंवा अपडेट करायचे असेल
                             cell = ws_teach.find(u.strip())
                             if cell:
-                                # युझरनेम सापडले, आता त्याच ओळीत Session_Token (समजा ८ वा कॉलम) अपडेट करणे
                                 headers = ws_teach.row_values(1)
                                 if "Session_Token" in headers:
                                     tok_col_idx = headers.index("Session_Token") + 1
@@ -689,12 +674,20 @@ elif mode == "वर्गशिक्षक लॉगिन पोर्टल"
             def_time = 30 if "घटक चाचणी" in sel_exam else 120
             st.write("---")
             
-            up_doc = st.file_uploader("Word फाईल (.docx) निवडा", type=["docx"], key="doc_up_teacher")
+            # Word (.docx) किंवा PDF (.pdf) फाईल अपलोडर
+            up_file = st.file_uploader("📁 प्रश्नपत्रिकेची Word (.docx) किंवा PDF (.pdf) फाईल निवडा", type=["docx", "pdf"], key="file_up_teacher")
             
+            df_q = pd.DataFrame()
             calc_marks = 0
-            if up_doc:
-                temp_df = parse_questions_docx(up_doc, my_cls, my_div, sel_exam, final_subject, 30, t_info.get('Teacher_Name', 'शिक्षक'))
-                calc_marks = int(temp_df['Marks'].astype(int).sum()) if not temp_df.empty else 0
+            
+            if up_file:
+                file_extension = up_file.name.split('.')[-1].lower()
+                if file_extension == 'docx':
+                    df_q = parse_questions_docx(up_file, my_cls, my_div, sel_exam, final_subject, 30, t_info.get('Teacher_Name', 'शिक्षक'))
+                elif file_extension == 'pdf':
+                    df_q = parse_questions_pdf(up_file, my_cls, my_div, sel_exam, final_subject, 30, t_info.get('Teacher_Name', 'शिक्षक'))
+                
+                calc_marks = int(df_q['Marks'].astype(int).sum()) if not df_q.empty and 'Marks' in df_q.columns else 0
 
             col_dur, col_tot_m = st.columns(2)
             with col_dur:
@@ -702,9 +695,7 @@ elif mode == "वर्गशिक्षक लॉगिन पोर्टल"
             with col_tot_m:
                 custom_total_marks_input = st.number_input("🎯 परीक्षेचे एकूण गुण (Total Marks):", min_value=1, max_value=500, value=(calc_marks if calc_marks > 0 else 20), step=1, key="t_total_marks_input")
 
-            if up_doc:
-                df_q = parse_questions_docx(up_doc, my_cls, my_div, sel_exam, final_subject, set_duration, t_info.get('Teacher_Name', 'शिक्षक'))
-                
+            if not df_q.empty:
                 st.write(f"एकूण प्रश्न: **{len(df_q)}** | स्वयंचलित मोजलेले गुण: **{calc_marks}** | ठरवलेले एकूण गुण: **{custom_total_marks_input}** | विषय: **{final_subject}**")
                 st.dataframe(df_q[["Exam_Type", "Subject", "Marks", "Duration_Minutes", "Question", "Option_A", "Option_B", "Option_C", "Option_D", "Correct_Option"]])
                 
@@ -712,6 +703,8 @@ elif mode == "वर्गशिक्षक लॉगिन पोर्टल"
                     try:
                         _, _, _, ws_q, _ = get_db()
                         cols_order = ["Class", "Division", "Exam_Type", "Subject", "Marks", "Duration_Minutes", "Question", "Option_A", "Option_B", "Option_C", "Option_D", "Correct_Option", "Added_By"]
+                        # Duration_Minutes युजरनेम टाईम नुसार अपडेट करणे
+                        df_q["Duration_Minutes"] = set_duration
                         ws_q.append_rows(df_q[cols_order].values.tolist())
                         st.success(f"✅ प्रश्नपत्रिका सुरक्षित सेव्ह झाली! (एकूण गुण: {custom_total_marks_input})")
                     except Exception as ex:
@@ -750,7 +743,7 @@ elif mode == "वर्गशिक्षक लॉगिन पोर्टल"
                             })
                         df_out = pd.DataFrame(s_creds)
                         st.dataframe(df_out[["Roll_No", "Student_Name", "Username", "Password", "Mobile"]])
-                        if st.button("ही सर्व खाती डेटाबेसमध्ये جوडा", key="add_stud_db"):
+                        if st.button("ही सर्व खाती डेटाबेसमध्ये जोडा", key="add_stud_db"):
                             try:
                                 rows_to_add = df_out[["Class", "Division", "Roll_No", "Student_Name", "Mobile", "Username", "Password"]].values.tolist()
                                 ws_stud.append_rows(rows_to_add)
