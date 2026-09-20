@@ -123,7 +123,7 @@ def get_db():
             creds_dict = dict(st.secrets["gcp_service_account"])
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         except Exception as e:
-            st.error("क्रेडेंशियल फाईल सापडली नाही! कृपया credentials.json फाईल तपासा.")
+            st.error("क्रेडेंशियल फाईल सापडली नाही! कृपया credentials.json किंवा Streamlit Secrets तपासा.")
             raise e
     
     client = gspread.authorize(creds)
@@ -674,7 +674,6 @@ elif mode == "वर्गशिक्षक लॉगिन पोर्टल"
             def_time = 30 if "घटक चाचणी" in sel_exam else 120
             st.write("---")
             
-            # Word (.docx) किंवा PDF (.pdf) फाईल अपलोडर
             up_file = st.file_uploader("📁 प्रश्नपत्रिकेची Word (.docx) किंवा PDF (.pdf) फाईल निवडा", type=["docx", "pdf"], key="file_up_teacher")
             
             df_q = pd.DataFrame()
@@ -703,7 +702,6 @@ elif mode == "वर्गशिक्षक लॉगिन पोर्टल"
                     try:
                         _, _, _, ws_q, _ = get_db()
                         cols_order = ["Class", "Division", "Exam_Type", "Subject", "Marks", "Duration_Minutes", "Question", "Option_A", "Option_B", "Option_C", "Option_D", "Correct_Option", "Added_By"]
-                        # Duration_Minutes युजरनेम टाईम नुसार अपडेट करणे
                         df_q["Duration_Minutes"] = set_duration
                         ws_q.append_rows(df_q[cols_order].values.tolist())
                         st.success(f"✅ प्रश्नपत्रिका सुरक्षित सेव्ह झाली! (एकूण गुण: {custom_total_marks_input})")
@@ -841,7 +839,7 @@ elif mode == "मुख्य प्रशासक":
         a1, a2, a3 = st.tabs(["👨‍🏫 शिक्षक निर्मिती", "📊 मास्टर निकाल", "🛡️ परीक्षा सुरक्षा (Webcam Control)"])
 
         with a1:
-            st.subheader("👨‍🏫 नवीन शिक्षक खाते निर्मिती")
+            st.subheader("👨‍🏫 नवीन शिक्षक खाते निर्मिती व यादी")
             t_n = st.text_input("शिक्षकांचे पूर्ण नाव:", key="adm_t_name").strip()
             t_m = st.text_input("मोबाईल नंबर (१० अंकी):", max_chars=10, key="adm_t_mob").strip()
             
@@ -882,6 +880,19 @@ elif mode == "मुख्य प्रशासक":
                         st.error(f"त्रुटी: {ex}")
                 else:
                     st.warning("कृपया अचूक नाव आणि १० अंकी मोबाईल नंबर प्रविष्ट करा.")
+
+            st.write("---")
+            st.markdown("#### 📋 सध्या नोंदणीकृत सर्व शिक्षकांची यादी:")
+            try:
+                _, ws_teach, _, _, _ = get_db()
+                df_all_t = safe_get_dataframe(ws_teach)
+                if not df_all_t.empty:
+                    show_t_cols = [c for c in ["Teacher_Name", "Mobile", "Assigned_Class", "Assigned_Division", "Username", "Password", "Date_Created"] if c in df_all_t.columns]
+                    st.dataframe(df_all_t[show_t_cols], use_container_width=True)
+                else:
+                    st.info("अद्याप कोणतीही शिक्षक खाती तयार केलेली नाहीत.")
+            except Exception as e:
+                st.error(f"यादी दाखवताना त्रुटी: {e}")
 
         with a2:
             st.subheader("📈 सर्व परीक्षांचा मास्टर निकाल (Centralized Master Reports)")
